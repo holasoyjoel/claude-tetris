@@ -1,0 +1,115 @@
+name: Claude Issue Triage
+
+on:
+  issues:
+    types: [opened, edited]
+
+concurrency:
+  group: issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    # No correr sobre PRs, issues de bots, ni issues que invocan @claude
+    # (de esos se encarga claude.yml y evitamos doble corrida).
+    if: |
+      github.event.issue.pull_request == null &&
+      github.event.issue.user.type != 'Bot' &&
+      !contains(github.event.issue.body, '@claude') &&
+      !contains(github.event.issue.title, '@claude')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+
+    steps:
+      - name: Asegurar labels de proyecto
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          create() { gh label create "$1" --color "$2" --description "$3" 2>/dev/null || true; }
+          create "area:gameplay"  "1d76db" "Colisión, rotación/wall kicks, gravedad, lock, spawn"
+          create "area:rendering" "5319e7" "draw(), drawBlock, drawNext, canvas, ghost piece"
+          create "area:ui"        "0e8a16" "index.html, style.css, overlay, controles, textos"
+          create "area:scoring"   "fbca04" "score, lines, level, dropInterval"
+          create "area:workflow"  "c5def5" "CI, GitHub Actions, tooling del repo"
+          create "prioridad:P0"   "b60205" "Crítico: rompe el juego o bloquea"
+          create "prioridad:P1"   "d93f0b" "Importante pero no bloqueante"
+          create "prioridad:P2"   "0052cc" "Menor / nice to have"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Issue Triage
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(gh label list:*),Bash(gh api:*),Read,Grep,Glob"'
+          prompt: |
+            Eres el triador automático de issues de este repositorio de Tetris (HTML/CSS/JS sin build).
+            Trabaja sobre el issue número ${{ github.event.issue.number }} del repo ${{ github.repository }}.
+            Todo tu texto de salida debe ser en ESPAÑOL (convención del repo, ver CLAUDE.md).
+
+            Pasos:
+
+            1. Lee `CLAUDE.md` para entender la arquitectura y los "coupling gotchas" ANTES de opinar.
+
+            2. Lee el issue:
+               `gh issue view ${{ github.event.issue.number }} --json title,body,labels,comments,url`
+
+            3. Detecta si es un sub-issue (tiene padre):
+               `gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }} --jq '{parent: .parent, sub: .sub_issues_summary}'`
+               Si tiene un issue padre, aplica solo labels y deja un comentario breve apuntando al issue padre; NO hagas el diagnóstico extenso.
+
+            4. Labels: `gh label list`. Elige SOLO de la lista existente y aplica con
+               `gh issue edit ${{ github.event.issue.number }} --add-label "l1,l2"`:
+               - exactamente UN tipo: `bug`, `enhancement`, `documentation` o `question`
+               - uno o más `area:*`
+               - exactamente UNA `prioridad:*`
+               - `accessibility` si aplica
+               No crees labels nuevos. No quites labels puestos por humanos.
+
+            5. Fundamenta el diagnóstico en el CÓDIGO REAL: usa Grep/Read sobre `game.js`,
+               `index.html`, `style.css`. Nada de especulación genérica; cita `archivo:línea` y
+               nombres de funciones (`collide`, `tryRotate`, `lockPiece`, `draw`, `drawBlock`, ...).
+
+            6. Publica el diagnóstico como comentario con ESTA estructura fija. La PRIMERA línea
+               del comentario debe ser exactamente el marcador:
+               <!-- claude-issue-triage -->
+
+               ## Resumen
+               (qué reporta/pide el issue, 1-2 líneas)
+
+               ## Análisis técnico
+               (causa probable o punto de intervención)
+
+               ## Archivos y símbolos afectados
+               (rutas con `archivo:línea` y funciones)
+
+               ## Enfoque propuesto
+               (pasos concretos de implementación)
+
+               ## Criterios de aceptación
+               (checklist verificable jugando en el navegador; no hay tests automáticos)
+
+               ## Riesgos / acoplamientos
+               (invariantes: alineación `COLORS`/`PIECES`; `COLS*BLOCK` == width del canvas y
+               `ROWS*BLOCK` == height; IDs que `game.js` busca sin guardas; pausa que resetea
+               `lastTime`; `.hidden` en style.css)
+
+               ## Preguntas abiertas
+               (omite esta sección entera si no hay ninguna)
+
+               Si el issue es ambiguo o falta información, dilo en "Preguntas abiertas" y baja la
+               confianza del análisis en vez de inventar una causa.
+
+            7. Actualización idempotente: en los `comments` del issue busca uno cuyo autor sea
+               `github-actions[bot]` cuyo body empiece con `<!-- claude-issue-triage -->`.
+               - Si existe: edítalo con
+                 `gh api --method PATCH repos/${{ github.repository }}/issues/comments/<id> -f body=@archivo`
+               - Si no existe: créalo con `gh issue comment ${{ github.event.issue.number }} --body-file archivo`
+               Así una edición del issue refresca el diagnóstico sin duplicar comentarios.
