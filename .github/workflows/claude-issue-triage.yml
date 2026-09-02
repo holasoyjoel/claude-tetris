@@ -1,0 +1,57 @@
+name: Claude Issue Triage
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  triage:
+    # Evita reprocesar sub-issues/tareas y evita el disparo cuando el título contiene @claude
+    # (ese caso lo maneja claude.yml)
+    if: |
+      !contains(github.event.issue.title, '@claude') &&
+      !contains(github.event.issue.body, '@claude')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude issue triage
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh label list:*)"'
+          prompt: |
+            Analiza el issue #${{ github.event.issue.number }} del repositorio ${{ github.repository }}.
+
+            Contexto: este es un clon de Tetris (JavaScript + canvas). Archivos clave:
+            - index.html / style.css: UI, overlay, controles, textos
+            - script.js (o similar): lógica de juego, render, scoring
+
+            Pasos:
+            1. Lee el issue con: gh issue view ${{ github.event.issue.number }} --json title,body,labels
+            2. Lee las etiquetas disponibles con: gh label list
+            3. Asigna SOLO etiquetas que ya existen. Elige:
+               - Tipo: bug / enhancement / documentation / question
+               - Área: area:gameplay / area:rendering / area:ui / area:scoring / area:workflow
+               - Prioridad: prioridad:P0 (rompe/bloquea el juego) / prioridad:P1 (importante) / prioridad:P2 (menor)
+               Aplica con: gh issue edit ${{ github.event.issue.number }} --add-label "label1,label2,..."
+            4. Publica UN comentario con un diagnóstico general en español que sirva para implementar la solución. Estructura:
+               ## Diagnóstico
+               - **Resumen del problema**
+               - **Causa probable** (archivos y funciones sospechosas, con rutas)
+               - **Propuesta de solución** (pasos concretos, alto nivel)
+               - **Riesgos / efectos colaterales**
+               - **Cómo verificar el arreglo**
+               Publica con: gh issue comment ${{ github.event.issue.number }} --body "..."
+
+            Si el issue fue editado y ya existe un comentario de diagnóstico previo tuyo, publica uno nuevo actualizado indicando que reemplaza al anterior.
+            No modifiques código. No cierres el issue.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
