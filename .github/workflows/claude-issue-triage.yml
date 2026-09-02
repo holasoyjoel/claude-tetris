@@ -51,6 +51,10 @@ jobs:
                - **Cómo verificar el arreglo**
                Publica con: gh issue comment ${{ github.event.issue.number }} --body "..."
 
+            El comentario debe estar escrito en formato Markdown que GitHub pueda interpretar correctamente
+            (encabezados con #, listas con -, bloques de código con ```, negritas con **, enlaces [texto](url)
+            y rutas de archivo con `backticks`).
+
             Si el issue fue editado y ya existe un comentario de diagnóstico previo tuyo, publica uno nuevo actualizado indicando que reemplaza al anterior.
             No modifiques código. No cierres el issue.
         env:
